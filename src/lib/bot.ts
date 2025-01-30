@@ -306,7 +306,7 @@ export default class Bot {
     var new_posts_digest = (
         values.concat(
             new_posts.map( x => crypto.createHash('sha256').update(x).digest('base64') )
-        ).slice(-300)
+        ).slice(-1000)
     ).join(',')
 
 
