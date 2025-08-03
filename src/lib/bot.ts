@@ -121,7 +121,16 @@ export default class Bot {
         text: richText.text,
         facets: richText.facets,
       };
-      return this.#agent.post(record);
+      var output;
+      try {
+          output = this.#agent.post(record);
+      } catch {
+          console.log("ERROR: in try/catch block");
+          console.log("Erroring post text:");
+          console.log(record.text);
+          output = new Promise( (res: Function, rej: Function) => {} );
+      }
+      return output;
     } else {
       return this.#agent.post(text);
     }
@@ -315,7 +324,8 @@ export default class Bot {
     new_posts.filter(p => p.includes('Metra')).map(p => 
         console.log(
             hashset.has(crypto.createHash('sha256').update(p).digest('base64')) ? 'ALREADY POSTED ONLINE:' : 'FULLY NEW POST:',
-            p
+            p,
+            `(length ${p.length} chars)`
         )
     )
     
