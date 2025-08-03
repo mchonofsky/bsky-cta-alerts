@@ -123,12 +123,12 @@ export default class Bot {
       };
       var output;
       try {
-          output = this.#agent.post(record);
+          output = await this.#agent.post(record);
       } catch {
           console.log("ERROR: in try/catch block");
           console.log("Erroring post text:");
           console.log(record.text);
-          output = new Promise( (res: Function, rej: Function) => {} );
+          output = '';
       }
       return output;
     } else {
