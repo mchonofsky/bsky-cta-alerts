@@ -7,6 +7,7 @@ export default async function getPostText(alert_: CTAAlert) {
     text = text.replaceAll( `&#${i};`, String.fromCharCode(i) )
   }
   text = text.replaceAll(`  +`, ' ')
+  text = text.replaceAll('\n', ' ')
   const emojis = 
     {
       red: "🟥",
@@ -31,14 +32,14 @@ export default async function getPostText(alert_: CTAAlert) {
   if ( text.includes("buses") || text.includes("bus stop") ) {
     text = `${emojis.bus} ${text}`;
   }
-
+  
   if (text.includes('🚆 Metra')) {
     var m = text.match(/(🚆 Metra [A-Z\-]+: )([A-Z\-]+) (.*)/)
     if (m !== null) {
         text = m[1] + m[3];
     }
   }
-
+  
   if (text.length > 300) {
     if (text.includes('🚆 Metra')) {
         let text_blocks = text.split('. ')
@@ -53,7 +54,6 @@ export default async function getPostText(alert_: CTAAlert) {
         text = text.slice(0, 250) + '... ' + alert_.AlertURL['#cdata-section']
     }
   }
-
 
   return text;
 }
