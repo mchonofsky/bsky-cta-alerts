@@ -197,7 +197,9 @@ export default class Bot {
         var matches = headline.match(rt_regex)
         var route = ''
         if ( matches !== null )  route = matches[0];
-        var descr =   metra_alerts[i].alert.description_text.translation[0].text.trim()
+        var descr =  (
+          metra_alerts[i].alert.description_text.translation[0].text.replace(/<\/?[^>]+(>|$)/g, "").replace(/&[a-z]*;/g,"").trim()
+        )
         if ( descr.length == 0 ) {
             descr = metra_alerts[i].alert.header_text.translation[0].text.trim()
         }
