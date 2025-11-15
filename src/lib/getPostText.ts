@@ -42,11 +42,15 @@ export default async function getPostText(alert_: CTAAlert) {
   
   if (text.length > 300) {
     if (text.includes('🚆 Metra')) {
-        let text_blocks = text.split('. ')
+        const text_blocks = text.split('. ')
         let t = text_blocks[0]
         let i = 1
-        while (t.length + text_blocks[i].length + 2 < 300 || i == t.length) {
-            t = t + '. ' + text_blocks[i]
+        while (i < text_blocks.length) {
+            const nextBlock = text_blocks[i]
+            if (t.length + nextBlock.length + 2 > 300) {
+                break
+            }
+            t = `${t}. ${nextBlock}`
             i = i + 1
         }
         text = t;
