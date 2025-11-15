@@ -150,23 +150,32 @@ export default class Bot {
       : this.defaultOptions;
     const bot = new Bot(service);
     await bot.login(bskyAccount);
-    let alerts = (
-      await 
-        axios.get<CTAData>(
-        'http://www.transitchicago.com/api/1.0/alerts.aspx?outputType=JSON&accessibility=FALSE&activeonly=TRUE')
-    ).data.CTAAlerts.Alert;
-    
+    try {
+        var alerts = (
+          await 
+            axios.get<CTAData>(
+            'http://www.transitchicago.com/api/1.0/alerts.aspx?outputType=JSON&accessibility=FALSE&activeonly=TRUE'
+            )
+        ).data.CTAAlerts.Alert;
+    } catch {
+        var alerts = []
+    }
+
     alerts = alerts.map (a => {
         let b = a;
         b.Agency = 'cta';
         return b;
     })
 
-    let metra_alerts = (
-        await axios.get<Array<MetraData>>('https://gtfsapi.metrarail.com/gtfs/alerts',
-            { auth: metraAccount }
-        )
-    ).data
+    try {
+        var metra_alerts = (
+            await axios.get<Array<MetraData>>('https://gtfsapi.metrarail.com/gtfs/alerts',
+                { auth: metraAccount }
+            )
+        ).data
+    } catch {
+        var metra_alerts = []
+    }
 
     const regex = /reminder|reopen|elevator|extra service|pedestrian crossing to close|tracks.*out of service|temporary.*platform.*will move/i ;
     
@@ -198,7 +207,7 @@ export default class Bot {
         var route = ''
         if ( matches !== null )  route = matches[0];
         var descr =  (
-          metra_alerts[i].alert.description_text.translation[0].text.replace(/<\/?[^>]+(>|$)/g, " ").replace(/&[a-z]*;/g," ").replace(/ +/," ")trim()
+          metra_alerts[i].alert.description_text.translation[0].text.replace(/<\/?[^>]+(>|$)/g, " ").replace(/&[a-z]*;/g," ").replace(/ +/," ").trim()
         )
         if ( descr.length == 0 ) {
             descr = metra_alerts[i].alert.header_text.translation[0].text.trim()
