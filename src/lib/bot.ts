@@ -1,9 +1,12 @@
 import axios from "axios";
 import admin from 'firebase-admin';
+import protobuf from "protobufjs";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
-import { bskyAccount, bskyService, firebaseServiceAccount, metraAccount } from "./config.js";
+import { bskyAccount, bskyService, firebaseServiceAccount, metraApiToken } from "./config.js";
 import type {
-  CTAData, CTAAlert, MetraData, MetraAlert
+  CTAData, CTAAlert, MetraEntity, MetraAlert
 } from "./cta_types.js"
 import getDeltaT from "./getDeltaT.js";
 import moment from 'moment-timezone';
@@ -84,6 +87,147 @@ async function putHash(hash: string): Promise<string> {
       console.error('Error setting document: ', e);
       return 'not ok';
     }
+}
+
+const GTFS_PROTO_PATHS = [
+  path.resolve(process.cwd(), "dist/lib/gtfs-realtime.proto"),
+  path.resolve(process.cwd(), "src/lib/gtfs-realtime.proto"),
+];
+
+type MetraProtoTypes = {
+  FeedMessage: protobuf.Type;
+  EntitySelector: protobuf.Type;
+  TimeRange: protobuf.Type;
+};
+
+let cachedMetraProto: MetraProtoTypes | null = null;
+
+async function loadMetraProto(): Promise<MetraProtoTypes> {
+  if (cachedMetraProto) {
+    return cachedMetraProto;
+  }
+
+  let lastError: unknown = null;
+  for (const candidate of GTFS_PROTO_PATHS) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    try {
+      const root = await protobuf.load(candidate);
+      cachedMetraProto = {
+        FeedMessage: root.lookupType("transit_realtime.FeedMessage"),
+        EntitySelector: root.lookupType("transit_realtime.EntitySelector"),
+        TimeRange: root.lookupType("transit_realtime.TimeRange"),
+      };
+      return cachedMetraProto;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error("Unable to locate GTFS proto definition for Metra alerts");
+}
+
+const toNumber = (value: unknown): number | undefined => {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "number") return value;
+  if (typeof (value as { toNumber?: () => number }).toNumber === "function") {
+    return (value as { toNumber: () => number }).toNumber();
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { low?: number }).low === "number" &&
+    typeof (value as { high?: number }).high === "number"
+  ) {
+    const { low = 0, high = 0 } = value as { low: number; high: number };
+    return high * 0x100000000 + (low >>> 0);
+  }
+  return undefined;
+};
+
+const firstTranslationText = (
+  field?: { translation?: Array<{ text?: string | null }> }
+): string => {
+  if (!field?.translation?.length) {
+    return "";
+  }
+  const candidate = field.translation.find(
+    (item) => typeof item?.text === "string" && item.text.trim().length > 0
+  );
+  return (candidate?.text ?? "").trim();
+};
+
+const sanitizeDescription = (text: string): string =>
+  text
+    .replace(/<\/?[^>]+(>|$)/g, " ")
+    .replace(/&[a-z]*;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const secondsToIso = (seconds?: number): string =>
+  typeof seconds === "number"
+    ? new Date(seconds * 1000).toISOString()
+    : new Date().toISOString();
+
+async function parseMetraEntities(feedData: Uint8Array): Promise<MetraEntity[]> {
+  const { FeedMessage, EntitySelector, TimeRange } = await loadMetraProto();
+  const feedMessage = FeedMessage.decode(feedData) as unknown as {
+    entity?: Array<Record<string, unknown>>;
+  };
+
+  const rawEntities = feedMessage.entity ?? [];
+
+  return rawEntities
+    .filter((entity) => entity?.alert)
+    .map((entity) => {
+      const alert = entity.alert as Record<string, unknown>;
+      const rawInformed = (alert?.informedEntity as Uint8Array[] | undefined) ?? [];
+      const informedEntities = rawInformed.map((raw) => {
+        const decoded = EntitySelector.decode(raw) as unknown as Record<string, unknown>;
+        const trip = decoded.trip as Record<string, unknown> | undefined;
+        return {
+          agencyId:
+            (decoded.agencyId as string | undefined) ??
+            (decoded.agency_id as string | undefined),
+          routeId:
+            (decoded.routeId as string | undefined) ??
+            (decoded.route_id as string | undefined) ??
+            (trip?.routeId as string | undefined) ??
+            (trip?.route_id as string | undefined),
+          stopId:
+            (decoded.stopId as string | undefined) ??
+            (decoded.stop_id as string | undefined) ??
+            (decoded.stopIdLegacy as string | undefined),
+        };
+      });
+
+      const rawPeriods = (alert?.activePeriod as Uint8Array[] | undefined) ?? [];
+      const activePeriods = rawPeriods.map((raw) => {
+        const decoded = TimeRange.decode(raw) as unknown as Record<string, unknown>;
+        return {
+          start: toNumber(decoded.start),
+          end: toNumber(decoded.end),
+        };
+      });
+
+      const metraAlert: MetraAlert = {
+        url: alert.url as MetraAlert["url"],
+        headerText: alert.headerText as MetraAlert["headerText"],
+        descriptionText: alert.descriptionText as MetraAlert["descriptionText"],
+        informedEntities,
+        activePeriods,
+      };
+
+      return {
+        id: (entity.id as string) ?? "",
+        isDeleted: (entity.isDeleted as boolean | undefined) ?? false,
+        alert: metraAlert,
+      };
+    });
 }
 type BotOptions = {
   service: string | URL;
@@ -167,90 +311,114 @@ export default class Bot {
         return b;
     })
 
+    let metra_alerts: MetraEntity[] = [];
     try {
-        var metra_alerts = (
-            await axios.get<Array<MetraData>>('https://gtfsapi.metrarail.com/gtfs/alerts',
-                { auth: metraAccount }
-            )
-        ).data
-    } catch {
-        var metra_alerts: MetraData[] = []
+        const response = await axios.get<ArrayBuffer>(
+            `https://gtfspublic.metrarr.com/gtfs/public/alerts?api_token=${encodeURIComponent(metraApiToken)}`,
+            { responseType: 'arraybuffer' }
+        );
+        const rawData = response.data;
+        const bytes = rawData instanceof Uint8Array ? rawData : new Uint8Array(rawData);
+        metra_alerts = await parseMetraEntities(bytes);
+    } catch (error) {
+        console.error('Failed to fetch Metra GTFS alerts:', error);
+        metra_alerts = [];
     }
+
+    metra_alerts = metra_alerts.filter(
+        (entity) => entity.alert !== undefined && !entity.isDeleted
+    );
 
     const regex = /reminder|reopen|elevator|extra service|pedestrian crossing to close|tracks.*out of service|temporary.*platform.*will move/i ;
     
+    const headlineFor = (entity: MetraEntity): string =>
+        entity.alert ? firstTranslationText(entity.alert.headerText) : '';
+
     // artificial debugging, shows what failed
     console.log('\n\nregex match, excluded\n')
     console.log(metra_alerts
         // true if matches exclusion words
-        .filter( x => regex.test(x.alert.header_text.translation[0].text) )
-        .map(x => x.alert.header_text.translation[0].text))
+        .filter( x => regex.test(headlineFor(x)) )
+        .map(x => headlineFor(x)))
     
     metra_alerts = metra_alerts.filter(
         x => {
-            let if_matches_exclusions = regex.test(x.alert.header_text.translation[0].text)
+            const if_matches_exclusions = regex.test(headlineFor(x));
             return (! if_matches_exclusions)
         }
     )
     console.log('\n\nremaining\n')
     console.log(metra_alerts
-        .map(x => [x.alert.header_text.translation[0].text,  regex.test(x.alert.header_text.translation[0].text)])
+        .map(x => [headlineFor(x),  regex.test(headlineFor(x))])
     )
-    metra_alerts.sort((a,b) => 
-        parseInt(a.id.replace(/[^0-9]/, '')) - parseInt(b.id.replace(/[^0-9]/, ''))
-    );
-    let rt_regex = /[A-Z][A-Z]-?[A-Z]?/g
-    var alert_texts: Array<{id: string, text: string}> = []
-    for (var i=0; i < metra_alerts.length; i++) {
-        var headline = metra_alerts[i].alert.header_text.translation[0].text 
-        var matches = headline.match(rt_regex)
-        var route = ''
-        if ( matches !== null )  route = matches[0];
-        var descr =  (
-          metra_alerts[i].alert.description_text.translation[0].text.replace(/<\/?[^>]+(>|$)/g, " ").replace(/&[a-z]*;/g," ").replace(/ +/," ").trim()
-        )
-        if ( descr.length == 0 ) {
-            descr = metra_alerts[i].alert.header_text.translation[0].text.trim()
+    metra_alerts.sort((a,b) => {
+        const aId = parseInt(a.id.replace(/[^0-9]/g, '') || '0', 10);
+        const bId = parseInt(b.id.replace(/[^0-9]/g, '') || '0', 10);
+        return aId - bId;
+    });
+
+    const rt_regex = /[A-Z][A-Z]-?[A-Z]?/g;
+    const alert_texts: Array<{id: string, text: string}> = [];
+
+    for (const entity of metra_alerts) {
+        const alert = entity.alert;
+        if (!alert) continue;
+
+        const headline = firstTranslationText(alert.headerText);
+        const matches = headline.match(rt_regex);
+        const routeFromHeadline = matches ? matches[0] : '';
+
+        let description = sanitizeDescription(firstTranslationText(alert.descriptionText));
+        if (description.length === 0) {
+            description = headline;
         }
-        var rt_pair = route
-        var affected_route = null;
-        if (rt_pair !== null ) {
-            affected_route = metra_alerts[i].alert.informed_entity[0].route_id;
+
+        const informedRoute = alert.informedEntities[0]?.routeId ?? routeFromHeadline;
+        if (!informedRoute) {
+            continue;
         }
-        if (affected_route !== null ) {
-            descr = descr.replaceAll(/\<[^>]*\>/g,'').split('&nbsp;').filter(x => x.length > 0)[0]
-            var full_text = `🚆 Metra${affected_route == undefined ? '' : ' ' + affected_route}: ${descr}`
-            alert_texts.push({id: metra_alerts[i].id, text: full_text})
-        }
+
+        const primarySentence =
+            description
+                .split('&nbsp;')
+                .map((segment) => segment.trim())
+                .find((segment) => segment.length > 0) ?? description;
+
+        const full_text = `🚆 Metra${informedRoute ? ' ' + informedRoute : ''}: ${primarySentence}`;
+        alert_texts.push({id: entity.id, text: full_text});
     }
-   
+
     metra_alerts.map(
         alert => {
-            var full_text_items = alert_texts.filter( x => x.id == alert.id);
-            var full_text = '';
-            if (full_text_items.length > 0) {
-                full_text = full_text_items[0].text
-
-                alerts.push( {
-                    Agency: 'metra',
-                    AlertId: alert.id.replaceAll(/[^0-9]/g, ''),
-                    Headline: alert.alert.header_text.translation[0].text,
-                    ShortDescription: full_text,
-                    FullDescription: {['#cdata-section']: full_text},
-                    SeverityColor: '',
-                    SeverityScore: '',
-                    SeverityCSS: '',
-                    Impact: '',
-                    EventStart: alert.alert.active_period.length ? alert.alert.active_period[0].start.low : (new Date()).toISOString(),
-                    EventEnd: alert.alert.active_period.length ? alert.alert.active_period[0].end.low : (new Date()).toISOString(),
-                    TBD: '',
-                    MajorAlert: '',
-                    AlertURL: {['#cdata-section']: alert.alert.url.translation[0].text},
-                    ImpactedService: {Service: []},
-                    ttim: '',
-                    GUID: ''
-                })
+            const full_text_items = alert_texts.filter( x => x.id === alert.id);
+            const full_text = full_text_items.length > 0 ? full_text_items[0].text : '';
+            const alertDetails = alert.alert;
+            if (!full_text || !alertDetails) {
+                return;
             }
+
+            const eventStartSeconds = alertDetails.activePeriods[0]?.start;
+            const eventEndSeconds = alertDetails.activePeriods[0]?.end;
+
+            alerts.push( {
+                Agency: 'metra',
+                AlertId: alert.id.replace(/[^0-9]/g, '') || String(Date.now()),
+                Headline: firstTranslationText(alertDetails.headerText),
+                ShortDescription: full_text,
+                FullDescription: {['#cdata-section']: full_text},
+                SeverityColor: '',
+                SeverityScore: '',
+                SeverityCSS: '',
+                Impact: '',
+                EventStart: secondsToIso(eventStartSeconds),
+                EventEnd: secondsToIso(eventEndSeconds),
+                TBD: '',
+                MajorAlert: '',
+                AlertURL: {['#cdata-section']: firstTranslationText(alertDetails.url)},
+                ImpactedService: {Service: []},
+                ttim: '',
+                GUID: ''
+            })
         }
     )
 

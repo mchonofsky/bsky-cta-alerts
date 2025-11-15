@@ -1,21 +1,27 @@
 
-interface MetraText {
-    text: string,
-    language: string
+export interface MetraTranslation {
+  text?: string;
+  language?: string;
+}
+
+export interface MetraEntitySelector {
+  agencyId?: string;
+  routeId?: string;
+  stopId?: string;
 }
 
 export interface MetraAlert {
-    url: {translation: [{text: string}]},
-    informed_entity: Array<{agency_id: string, route_id: string}>,
-    active_period: Array<{start: {low: string}, end: {low: string}}>,
-    header_text: { translation: Array<MetraText> },
-    description_text: { translation: Array<MetraText> }
-
+  url?: { translation?: MetraTranslation[] };
+  headerText?: { translation?: MetraTranslation[] };
+  descriptionText?: { translation?: MetraTranslation[] };
+  informedEntities: MetraEntitySelector[];
+  activePeriods: Array<{ start?: number; end?: number }>;
 }
-export interface MetraData {
-    id: string,
-    is_deleted: Boolean,
-    alert: MetraAlert
+
+export interface MetraEntity {
+  id: string;
+  isDeleted?: boolean;
+  alert?: MetraAlert;
 }
 export interface CTAData {
     CTAAlerts: {

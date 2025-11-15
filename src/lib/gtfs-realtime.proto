@@ -1,0 +1,117 @@
+syntax = "proto2";
+
+package transit_realtime;
+
+// Minimal subset of the GTFS Realtime proto needed for alerts.
+
+message FeedMessage {
+  required FeedHeader header = 1;
+  repeated FeedEntity entity = 2;
+}
+
+message FeedHeader {
+  required string gtfs_realtime_version = 1;
+  optional Incrementality incrementality = 2 [default = FULL_DATASET];
+  optional uint64 timestamp = 3;
+
+  enum Incrementality {
+    FULL_DATASET = 0;
+    DIFFERENTIAL = 1;
+  }
+}
+
+message FeedEntity {
+  required string id = 1;
+  optional bool is_deleted = 2 [default = false];
+  optional TripUpdate trip_update = 3;
+  optional VehiclePosition vehicle = 4;
+  optional Alert alert = 5;
+}
+
+message TimeRange {
+  optional uint64 start = 1;
+  optional uint64 end = 2;
+}
+
+message EntitySelector {
+  optional string agency_id = 1;
+  optional string route_id = 2;
+  optional TripDescriptor trip = 3;
+  optional string stop_id = 4;
+  optional string stop_id_legacy = 5;
+}
+
+message TripUpdate {}
+
+message VehiclePosition {}
+
+message TripDescriptor {
+  optional string trip_id = 1;
+  optional string start_time = 2;
+  optional string start_date = 3;
+  optional ScheduleRelationship schedule_relationship = 4 [default = SCHEDULED];
+  optional string route_id = 5;
+
+  enum ScheduleRelationship {
+    SCHEDULED = 0;
+    ADDED = 1;
+    UNSCHEDULED = 2;
+    CANCELED = 3;
+  }
+}
+
+message TranslatedString {
+  repeated Translation translation = 1;
+
+  message Translation {
+    optional string text = 1;
+    optional string language = 2;
+  }
+}
+
+message Alert {
+  repeated TimeRange active_period = 1;
+  repeated bytes informed_entity = 5;
+  optional Cause cause = 6 [default = UNKNOWN_CAUSE];
+  optional Effect effect = 7 [default = UNKNOWN_EFFECT];
+  optional TranslatedString url = 8;
+  optional TranslatedString header_text = 10;
+  optional TranslatedString description_text = 11;
+  optional TranslatedString tts_header_text = 12;
+  optional TranslatedString tts_description_text = 13;
+  optional SeverityLevel severity_level = 14 [default = UNKNOWN_SEVERITY];
+
+  enum Cause {
+    CAUSE_UNKNOWN = 0;
+    OTHER_CAUSE = 1;
+    TECHNICAL_PROBLEM = 2;
+    STRIKE = 3;
+    DEMONSTRATION = 4;
+    ACCIDENT = 5;
+    HOLIDAY = 6;
+    WEATHER = 7;
+    MAINTENANCE = 8;
+    CONSTRUCTION = 9;
+    POLICE_ACTIVITY = 10;
+    MEDICAL_EMERGENCY = 11;
+  }
+
+  enum Effect {
+    EFFECT_UNKNOWN = 0;
+    NO_SERVICE = 1;
+    REDUCED_SERVICE = 2;
+    SIGNIFICANT_DELAYS = 3;
+    DETOUR = 4;
+    ADDITIONAL_SERVICE = 5;
+    MODIFIED_SERVICE = 6;
+    OTHER_EFFECT = 7;
+    STOP_MOVED = 8;
+  }
+
+  enum SeverityLevel {
+    UNKNOWN_SEVERITY = 0;
+    INFO = 1;
+    WARNING = 2;
+    SEVERE = 3;
+  }
+}
