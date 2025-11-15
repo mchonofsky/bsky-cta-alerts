@@ -158,7 +158,7 @@ export default class Bot {
             )
         ).data.CTAAlerts.Alert;
     } catch {
-        var alerts = []
+        var alerts: CTAAlert[]  = []
     }
 
     alerts = alerts.map (a => {
@@ -174,7 +174,7 @@ export default class Bot {
             )
         ).data
     } catch {
-        var metra_alerts = []
+        var metra_alerts: MetraData[] = []
     }
 
     const regex = /reminder|reopen|elevator|extra service|pedestrian crossing to close|tracks.*out of service|temporary.*platform.*will move/i ;
